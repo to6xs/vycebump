@@ -279,7 +279,7 @@ def _chrome_user_agent(chrome: str) -> str:
         match = re.search(r"(\d+)\.", (result.stdout or "") + (result.stderr or ""))
         if match:
             major = match.group(1)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
         pass
     return (
         f"Mozilla/5.0 ({platform_token}) AppleWebKit/537.36 "
