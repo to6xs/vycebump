@@ -67,6 +67,40 @@ function valueOf(result) {
   return result && result.result && result.result.result && result.result.result.value;
 }
 
+async function clickCheckbox(send, sid) {
+  // Prefer trusted CDP input events over a synthetic DOM click: the widget may
+  // fold pointer timing/coordinates into the token's risk score.
+  const raw = valueOf(await send('Runtime.evaluate', {
+    expression: `(()=>{const b=document.getElementById("check");if(!b)return "";const r=b.getBoundingClientRect();return JSON.stringify({x:r.x,y:r.y,w:r.width,h:r.height});})()`,
+    returnByValue: true,
+  }, sid));
+  let rect = null;
+  try { rect = JSON.parse(raw || 'null'); } catch { rect = null; }
+  if (rect && rect.w > 0 && rect.h > 0) {
+    const cx = rect.x + rect.w * (0.4 + Math.random() * 0.2);
+    const cy = rect.y + rect.h * (0.4 + Math.random() * 0.2);
+    const path = [
+      [rect.x - 40, rect.y - 30],
+      [rect.x + rect.w * 0.2, rect.y + rect.h * 0.1],
+      [cx - 12, cy - 6],
+      [cx, cy],
+    ];
+    for (const [x, y] of path) {
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' }, sid);
+      await sleep(80 + Math.random() * 120);
+    }
+    await sleep(120 + Math.random() * 180);
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: cx, y: cy, button: 'left', clickCount: 1 }, sid);
+    await sleep(60 + Math.random() * 60);
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: cx, y: cy, button: 'left', clickCount: 1 }, sid);
+    return true;
+  }
+  return valueOf(await send('Runtime.evaluate', {
+    expression: `(()=>{const b=document.getElementById("check"); if(!b) return false; b.click(); return true;})()`,
+    returnByValue: true,
+  }, sid)) === true;
+}
+
 async function main() {
   const browserWs = await getBrowserWs();
   const ws = new WebSocket(browserWs);
@@ -158,7 +192,7 @@ async function main() {
   if (RENEW_SERVER_ID) {
     // Confirm the session works before spending the token.
     const authStatus = valueOf(await send('Runtime.evaluate', {
-      expression: `fetch('/api/me',{credentials:'include'}).then(r=>r.status).catch(()=>0)`,
+      expression: `fetch('/api/me',{credentials:'same-origin'}).then(r=>r.status).catch(()=>0)`,
       awaitPromise: true,
       returnByValue: true,
     }));
@@ -209,11 +243,8 @@ async function main() {
 
   if (!token) {
     // Let /v1/init and the pow setup settle before the click.
-    await sleep(1200);
-    const clicked = valueOf(await send('Runtime.evaluate', {
-      expression: `(()=>{const b=document.getElementById("check"); if(!b) return false; b.click(); return true;})()`,
-      returnByValue: true,
-    }, frameSessionId));
+    await sleep(1500 + Math.random() * 1500);
+    const clicked = await clickCheckbox(send, frameSessionId);
     if (!clicked) throw new Error('captcha checkbox not found');
 
     const solveDeadline = Date.now() + SOLVE_TIMEOUT_MS;
@@ -237,8 +268,8 @@ async function renewInBrowser(send, token) {
   const expression =
     `(async()=>{try{` +
     `const r=await fetch('/api/servers/${encodeURIComponent(RENEW_SERVER_ID)}/renew',{` +
-    `method:'POST',credentials:'include',` +
-    `headers:{'Content-Type':'application/json','Accept':'application/json'},` +
+    `method:'POST',credentials:'same-origin',` +
+    `headers:{'Content-Type':'application/json'},` +
     `body:JSON.stringify({captchaResponse:${JSON.stringify(token)}})});` +
     `const t=await r.text();` +
     `return JSON.stringify({status:r.status,body:t.slice(0,800)});` +
