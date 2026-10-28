@@ -130,7 +130,69 @@ async function main() {
   await send('Page.enable');
   await send('Runtime.enable');
   await send('Network.enable');
-  await send('Page.navigate', { url: frameUrl });
+
+  // The Bestcap frame refuses to render when loaded as a top-level document
+  // (it responds with "embedded only"). Load the real site as the parent and
+  // embed the frame, then drive the widget through its own OOPIF target.
+  for (const cookie of parseCookies(COOKIE_HEADER)) {
+    await send('Network.setCookie', {
+      url: `${PARENT_ORIGIN}/`,
+      name: cookie.name,
+      value: cookie.value,
+      path: '/',
+      secure: true,
+      httpOnly: true,
+    });
+  }
+
+  await send('Page.navigate', { url: `${PARENT_ORIGIN}/` });
+  const loadDeadline = Date.now() + 20000;
+  while (Date.now() < loadDeadline) {
+    await sleep(300);
+    const state = valueOf(await send('Runtime.evaluate', {
+      expression: 'document.readyState', returnByValue: true,
+    }));
+    if (state === 'complete') break;
+  }
+
+  if (RENEW_SERVER_ID) {
+    // Confirm the session works before spending the token.
+    const authStatus = valueOf(await send('Runtime.evaluate', {
+      expression: `fetch('/api/me',{credentials:'include'}).then(r=>r.status).catch(()=>0)`,
+      awaitPromise: true,
+      returnByValue: true,
+    }));
+    if (authStatus !== 200) {
+      process.stdout.write(`RENEW:${JSON.stringify({ status: 0, body: `browser session rejected the cookie (HTTP ${authStatus})` })}\n`);
+      settled = true;
+      process.exit(0);
+    }
+  }
+
+  const injected = valueOf(await send('Runtime.evaluate', {
+    expression: `(()=>{try{const f=document.createElement('iframe');f.id='vyce-bc-frame';f.src=${JSON.stringify(frameUrl)};f.style.cssText='width:320px;height:80px;border:0';const host=document.body||document.documentElement;if(!host)return false;host.appendChild(f);return true}catch(e){return false}})()`,
+    returnByValue: true,
+  }));
+  if (!injected) throw new Error('cannot embed captcha frame');
+
+  // Locate the captcha iframe (cross-site => out-of-process target).
+  let frameTargetId = null;
+  const frameDeadline = Date.now() + 15000;
+  while (Date.now() < frameDeadline && !frameTargetId) {
+    await sleep(500);
+    const targets = await send('Target.getTargets', {}, null);
+    const infos = (targets && targets.result && targets.result.targetInfos) || [];
+    const match = infos.find((t) => t.type === 'iframe' && String(t.url || '').includes('captcha.vyceai.com/v1/frame'));
+    if (match) frameTargetId = match.targetId;
+  }
+  if (!frameTargetId) throw new Error('captcha iframe target not found');
+
+  const frameAttached = await send('Target.attachToTarget', { targetId: frameTargetId, flatten: true }, null);
+  const frameSessionId = frameAttached && frameAttached.result && frameAttached.result.sessionId;
+  if (!frameSessionId) throw new Error('cannot attach to captcha iframe');
+
+  await send('Runtime.enable', {}, frameSessionId);
+  await send('Network.enable', {}, frameSessionId);
 
   // Wait until the checkbox exists and the widget has finished /v1/init.
   const readyDeadline = Date.now() + 20000;
@@ -140,7 +202,7 @@ async function main() {
     const value = valueOf(await send('Runtime.evaluate', {
       expression: `(document.getElementById("card")||{}).dataset?.state + "|" + !!document.getElementById("check")`,
       returnByValue: true,
-    }));
+    }, frameSessionId));
     if (typeof value === 'string' && value.endsWith('|true')) { ready = true; break; }
   }
   if (!ready && !token) throw new Error('captcha widget did not become ready');
@@ -151,7 +213,7 @@ async function main() {
     const clicked = valueOf(await send('Runtime.evaluate', {
       expression: `(()=>{const b=document.getElementById("check"); if(!b) return false; b.click(); return true;})()`,
       returnByValue: true,
-    }));
+    }, frameSessionId));
     if (!clicked) throw new Error('captcha checkbox not found');
 
     const solveDeadline = Date.now() + SOLVE_TIMEOUT_MS;
@@ -171,48 +233,7 @@ async function main() {
 }
 
 async function renewInBrowser(send, token) {
-  const created = await send('Target.createTarget', { url: 'about:blank' }, null);
-  const targetId = created.result && created.result.targetId;
-  if (!targetId) return JSON.stringify({ status: 0, body: 'cannot open renewal tab' });
-
-  const attached = await send('Target.attachToTarget', { targetId, flatten: true }, null);
-  const sid = attached.result && attached.result.sessionId;
-  if (!sid) return JSON.stringify({ status: 0, body: 'cannot attach renewal tab' });
-
-  await send('Page.enable', {}, sid);
-  await send('Runtime.enable', {}, sid);
-  await send('Page.navigate', { url: `${PARENT_ORIGIN}/` }, sid);
-
-  const loadDeadline = Date.now() + 20000;
-  while (Date.now() < loadDeadline) {
-    await sleep(300);
-    const state = valueOf(await send('Runtime.evaluate', {
-      expression: 'document.readyState', returnByValue: true,
-    }, sid));
-    if (state === 'complete') break;
-  }
-
-  for (const cookie of parseCookies(COOKIE_HEADER)) {
-    await send('Network.setCookie', {
-      url: `${PARENT_ORIGIN}/`,
-      name: cookie.name,
-      value: cookie.value,
-      path: '/',
-      secure: true,
-      httpOnly: true,
-    }, sid);
-  }
-
-  // Confirm the session works before spending the token.
-  const authStatus = valueOf(await send('Runtime.evaluate', {
-    expression: `fetch('/api/me',{credentials:'include'}).then(r=>r.status).catch(()=>0)`,
-    awaitPromise: true,
-    returnByValue: true,
-  }, sid));
-  if (authStatus !== 200) {
-    return JSON.stringify({ status: 0, body: `browser session rejected the cookie (HTTP ${authStatus})` });
-  }
-
+  // Reuse the parent tab that already holds the authenticated session.
   const expression =
     `(async()=>{try{` +
     `const r=await fetch('/api/servers/${encodeURIComponent(RENEW_SERVER_ID)}/renew',{` +
@@ -225,7 +246,7 @@ async function renewInBrowser(send, token) {
 
   const value = valueOf(await send('Runtime.evaluate', {
     expression, awaitPromise: true, returnByValue: true,
-  }, sid));
+  }));
 
   return value || JSON.stringify({ status: 0, body: 'renewal evaluation returned nothing' });
 }
