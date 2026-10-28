@@ -264,6 +264,29 @@ def fetch_captcha_sitekey(proxy: Optional[str] = None) -> str:
     return CAPTCHA_SITEKEY_DEFAULT
 
 
+def _chrome_user_agent(chrome: str) -> str:
+    """构造与真实浏览器一致的 UA，避免 HeadlessChrome 被风控标记。"""
+    platform_token = "X11; Linux x86_64"
+    if sys.platform == "darwin":
+        platform_token = "Macintosh; Intel Mac OS X 10_15_7"
+    elif sys.platform.startswith("win"):
+        platform_token = "Windows NT 10.0; Win64; x64"
+    major = "133"
+    try:
+        result = subprocess.run(
+            [chrome, "--version"], capture_output=True, text=True, timeout=5
+        )
+        match = re.search(r"(\d+)\.", (result.stdout or "") + (result.stderr or ""))
+        if match:
+            major = match.group(1)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return (
+        f"Mozilla/5.0 ({platform_token}) AppleWebKit/537.36 "
+        f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36"
+    )
+
+
 def _run_captcha_solver(
     proxy: Optional[str] = None,
     server_id: Optional[str] = None,
@@ -304,6 +327,10 @@ def _run_captcha_solver(
             "--mute-audio",
             f"--user-data-dir={profile_dir}",
             f"--remote-debugging-port={port}",
+            f"--user-agent={_chrome_user_agent(chrome)}",
+            "--disable-blink-features=AutomationControlled",
+            "--lang=en-US",
+            "--window-size=1280,800",
             "about:blank",
         ]
         if sys.platform.startswith("linux"):
