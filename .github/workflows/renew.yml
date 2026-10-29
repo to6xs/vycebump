@@ -150,7 +150,13 @@ jobs:
         PROXY_SERVER: ${{ steps.proxy.outputs.proxy_server }}
         CAPTCHA_SOLVER: ${{ vars.CAPTCHA_SOLVER || 'auto' }}
         CHROME_BIN: ${{ vars.CHROME_BIN }}
-      run: python3 app.py
+      run: |
+        # 有头 Chrome（Xvfb）指纹更接近真实浏览器，降低 Bestcap 风控拒绝
+        if command -v xvfb-run >/dev/null 2>&1 && xvfb-run -a true >/dev/null 2>&1; then
+          xvfb-run -a --server-args="-screen 0 1280x800x24" python3 app.py
+        else
+          python3 app.py
+        fi
 
     - name: Upload Diagnostic Logs
       if: failure()

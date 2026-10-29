@@ -315,10 +315,16 @@ def _run_captcha_solver(
     profile_dir = tempfile.mkdtemp(prefix="vycebump-chrome-")
     proc = None
     try:
+        headless_env = (os.environ.get("CHROME_HEADLESS") or "").strip().lower()
+        if headless_env in ("0", "false", "no", "off", "headful"):
+            headless = False
+        elif headless_env in ("1", "true", "yes", "on", "headless"):
+            headless = True
+        else:
+            # 有 DISPLAY（例如 xvfb-run）时优先真实有头模式，指纹更接近人工浏览器。
+            headless = not bool(os.environ.get("DISPLAY"))
         args = [
             chrome,
-            "--headless=new",
-            "--disable-gpu",
             "--disable-extensions",
             "--disable-background-networking",
             "--disable-sync",
@@ -331,8 +337,10 @@ def _run_captcha_solver(
             "--disable-blink-features=AutomationControlled",
             "--lang=en-US",
             "--window-size=1280,800",
-            "about:blank",
         ]
+        if headless:
+            args.extend(["--headless=new", "--disable-gpu"])
+        args.append("about:blank")
         if sys.platform.startswith("linux"):
             args.extend(["--no-sandbox", "--disable-dev-shm-usage"])
         if proxy:
