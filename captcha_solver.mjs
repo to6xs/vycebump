@@ -272,7 +272,7 @@ async function renewInBrowser(send, token) {
     `headers:{'Content-Type':'application/json'},` +
     `body:JSON.stringify({captchaResponse:${JSON.stringify(token)}})});` +
     `const t=await r.text();` +
-    `return JSON.stringify({status:r.status,body:t.slice(0,800)});` +
+    `return JSON.stringify({status:r.status,body:t.slice(0,20000)});` +
     `}catch(e){return JSON.stringify({status:0,body:String((e&&e.message)||e)});}})()`;
 
   const value = valueOf(await send('Runtime.evaluate', {
