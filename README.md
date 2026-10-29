@@ -80,6 +80,7 @@ Vyce.cloud 为免费 VPS（如 `Vps-Mini`，1 vCore / 2 GB RAM / 6 GB NVMe / 纯
    | `ONEMAIL_BASE_URL` | | [One-Mail](https://github.com/dengyie/one-mail) 自建实例地址（如 `https://mail.example.com`），配 `ONEMAIL_CREDENTIAL` + `EMAIL_TO` 即启用 HTTP API 发信 |
    | `ONEMAIL_CREDENTIAL` | | `user` 模式填地址 JWT；`admin` 模式填管理密码 |
    | `PROXY_URL` | | 代理节点链接（`vless://`、`hy2://`、`socks5://` 等） |
+   | `CRON_JOB` | | cron-job.org 自调度，格式 `API_Key,JobID`；脚本每次跑完会写回下次触发时间 |
    | `USERS_JSON` | | 多账号配置，见下方 |
 
    Cookie 获取方式：浏览器 F12 → Application → Cookies → `https://vyce.cloud`，复制 `__Host-vyce_sid` 的值；也可直接从请求头 `Cookie` 中复制。
@@ -93,11 +94,13 @@ Vyce.cloud 为免费 VPS（如 `Vps-Mini`，1 vCore / 2 GB RAM / 6 GB NVMe / 纯
    ]
    ```
 
-4. 进入仓库 **Actions** 页面，点击 **Enable workflow** 启用定时调度，然后选择 **Vyce.cloud Auto Renew → Run workflow** 做一次手动验证。
+4. 进入仓库 **Actions** 页面，点击 **Enable workflow** 启用工作流，然后选择 **Vyce.cloud Auto Renew → Run workflow** 做一次手动验证。
 
 > ⚠️ 续期需要完成 Bestcap CAPTCHA：工作流会先检查 `node`（18+）与 Chrome/Chromium。`ubuntu-latest` 运行器已预装两者，通常无需额外配置；若使用自建运行器或自定义路径，可通过仓库 **Variables** 设置 `CHROME_BIN`。
 
-工作流默认每 4 小时运行一次（`0 */4 * * *`），并支持手动指定 `force` 强制续期（忽略冷却保护，用于调试）。
+工作流**不再使用 GitHub 定时任务**，改由 [cron-job.org](https://cron-job.org) 调用 GitHub API 触发；脚本每次运行结束会把下一次触发时间写回 cron-job.org（成功约 **1445 分钟**后，失败 **30 分钟**后重试），避免每 2 小时空跑。也支持手动指定 `force` 强制续期（忽略冷却保护，用于调试）。
+
+> cron-job.org 任务配置：URL 填 `https://api.github.com/repos/<owner>/<repo>/actions/workflows/renew.yml/dispatches`，方法 `POST`，Header 加 `Authorization: Bearer <有 actions:write 权限的 PAT>` 与 `Accept: application/vnd.github+json`，Body 填 `{"ref":"main"}`。Secrets 里的 `CRON_JOB` 填该任务的 `API_Key,JobID` 即可让脚本自动改期。
 
 ### 方式二：本地运行（搭配 Chrome 9222 端口）
 
@@ -157,6 +160,7 @@ python3 app.py
 | `ONEMAIL_FROM_NAME` | 发件人显示名 | `Vycebump` | `Vycebump` |
 | `PROXY_SERVER` | HTTP/SOCKS 代理地址（未设置时自动读取 `https_proxy` / `http_proxy`） | `http://127.0.0.1:8080` | 空 |
 | `PROXY_URL` | 全协议节点分享链接（Actions 中拉起 sing-box 并健康探测） | `hy2://pwd@host:port?sni=...` | 空 |
+| `CRON_JOB` | cron-job.org 自调度凭据，格式 `API_Key,JobID`（脚本据此写回下次触发时间） | `zaX78...,12345` | 空 |
 | `PROXY_CHAIN_URL` | 二级链式代理节点，与 `PROXY_URL` 组成双跳（代码支持，默认工作流未注入，需自行加 env） | `socks5://127.0.0.1:1080` | 空 |
 | `ALLOW_INSECURE_PROXY` | 允许节点携带 `insecure=1`（跳过 TLS 证书校验；默认工作流未注入，需自行加 env） | `1` / `true` | 关闭 |
 | `CAPTCHA_SOLVER` | CAPTCHA 求解模式：`auto` 自动求解；`off` 关闭（续期大概率返回 400） | `auto` / `off` | `auto` |

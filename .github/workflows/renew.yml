@@ -1,11 +1,9 @@
 name: Vyce.cloud Auto Renew
 
 on:
-  schedule:
-    # 每 2 小时调度执行一次：CAPTCHA 校验故障在服务端侧波动时，
-    # 更高频的重试能在到期前（任意时刻恢复时）尽快补上续期。
-    - cron: '0 */2 * * *'
-  workflow_dispatch: # 支持 GitHub 控制台手动一键触发
+  # 不再使用 GitHub 定时任务；由 cron-job.org 在续期窗口附近触发
+  # （脚本每次跑完会把下次触发时间写回 cron-job.org）。
+  workflow_dispatch: # 支持 GitHub 控制台手动一键触发 / cron-job.org 调用
     inputs:
       force:
         description: "是否强制发起续期请求 (忽略 24h 冷却保护)"
@@ -42,6 +40,7 @@ jobs:
       env:
         CAPTCHA_SOLVER: ${{ vars.CAPTCHA_SOLVER || 'auto' }}
         CHROME_BIN: ${{ vars.CHROME_BIN }}
+        CRON_JOB: ${{ secrets.CRON_JOB }}
       run: |
         case "$(echo "${CAPTCHA_SOLVER:-auto}" | tr '[:upper:]' '[:lower:]')" in
           off|false|0|no|disabled)

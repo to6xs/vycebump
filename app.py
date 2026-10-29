@@ -72,6 +72,11 @@ ONEMAIL_CREDENTIAL = os.environ.get("ONEMAIL_CREDENTIAL") or ""
 ONEMAIL_FROM_NAME = os.environ.get("ONEMAIL_FROM_NAME") or "Vycebump"
 CDP_URL = os.environ.get("CDP_URL") or "http://127.0.0.1:9222"
 FORCE_RENEW = os.environ.get("FORCE_RENEW", "").lower() in ("true", "1", "yes")
+# cron-job.org 自调度：CRON_JOB="API_Key,JobID"。Vyce 在剩余 24h 内可续期，
+# 因此成功续期后把下次触发写到约 1445 分钟后；失败则 30 分钟后重试。
+CRON_JOB = os.environ.get("CRON_JOB", "").strip()
+CRON_NEXT_DELAY_MINUTES = 1445
+CRON_RETRY_DELAY_MINUTES = 30
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.environ.get("STATE_FILE") or os.path.join(SCRIPT_DIR, "renew_state.json")
 
@@ -1261,6 +1266,70 @@ def process_account(account: Dict, state: Dict, proxy: Optional[str] = None) -> 
 # ============================================================
 # 主执行入口
 # ============================================================
+def update_cronjob_schedule(delay_minutes: int) -> None:
+    """写回 cron-job.org 的下次触发时间（北京时区），实现自调度。"""
+    if not CRON_JOB or "," not in CRON_JOB:
+        print("⚠️ 未配置 CRON_JOB（格式 API_Key,JobID），跳过写回调度")
+        return
+    api_key, job_id = (part.strip() for part in CRON_JOB.split(",", 1))
+    if not api_key or not job_id:
+        print("⚠️ CRON_JOB 配置不完整，跳过写回调度")
+        return
+
+    beijing = datetime.timezone(datetime.timedelta(hours=8))
+    delay_minutes = max(int(delay_minutes), 1)
+    next_run = datetime.datetime.now(beijing) + datetime.timedelta(minutes=delay_minutes)
+    payload = json.dumps({
+        "job": {
+            "schedule": {
+                "timezone": "Asia/Shanghai",
+                "expiresAt": 0,
+                "hours": [next_run.hour],
+                "minutes": [next_run.minute],
+                "mdays": [next_run.day],
+                "months": [next_run.month],
+                "wdays": [-1],
+            }
+        }
+    }).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    url = f"https://api.cron-job.org/jobs/{urllib.parse.quote(job_id, safe='')}"
+    for attempt in range(1, 4):
+        try:
+            request = urllib.request.Request(url, data=payload, headers=headers, method="PATCH")
+            with urllib.request.urlopen(request, timeout=15) as response:
+                response.read()
+            print(
+                "🔄 已写回 cron-job.org：约 "
+                f"{delay_minutes} 分钟后触发（北京时间 "
+                f"{next_run.month:02d}/{next_run.day:02d} "
+                f"{next_run.hour:02d}:{next_run.minute:02d}）"
+            )
+            return
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            if attempt < 3:
+                time.sleep(10)
+            else:
+                print(f"💥 写回 cron-job.org 调度失败: {safe_error_text(exc, 160)}")
+
+
+def cron_delay_from_state(state: Dict, now_ms: int) -> int:
+    """根据各服务器下次可续期时间计算 cron 触发延迟（分钟）。"""
+    next_ts = []
+    for entry in state.values():
+        if isinstance(entry, dict):
+            ts = entry.get("next_renewal_ts")
+            if isinstance(ts, (int, float)):
+                next_ts.append(int(ts))
+    if not next_ts:
+        return CRON_NEXT_DELAY_MINUTES
+    delay = int((min(next_ts) - now_ms) / 60000) + 5
+    return max(delay, 10)
+
+
 def main():
     print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] vycebump 保活脚本启动")
 
@@ -1281,6 +1350,7 @@ def main():
         print("  1. 环境变量 VYCE_COOKIE='__Host-vyce_sid=...'")
         print("  2. 环境变量 USERS_JSON='[{\"cookie\": \"...\", \"name\": \"...\"}]'")
         print("  3. 本机启动 Chrome 并启用调试端口 (--remote-debugging-port=9222)")
+        update_cronjob_schedule(CRON_RETRY_DELAY_MINUTES)
         sys.exit(1)
 
     state = load_state()
@@ -1298,6 +1368,12 @@ def main():
     if not save_state(state):
         all_success = False
     print(f"\n✅ 任务处理完毕，状态已保存至 {STATE_FILE}。")
+
+    if all_success:
+        update_cronjob_schedule(cron_delay_from_state(state, int(time.time() * 1000)))
+    else:
+        update_cronjob_schedule(CRON_RETRY_DELAY_MINUTES)
+
     if not all_success:
         print("❌ 检测到有账户处理失败或续期异常，以非零状态码退出 (exit 1)。")
         sys.exit(1)
