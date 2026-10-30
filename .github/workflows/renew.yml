@@ -40,7 +40,6 @@ jobs:
       env:
         CAPTCHA_SOLVER: ${{ vars.CAPTCHA_SOLVER || 'auto' }}
         CHROME_BIN: ${{ vars.CHROME_BIN }}
-        CRON_JOB: ${{ secrets.CRON_JOB }}
       run: |
         case "$(echo "${CAPTCHA_SOLVER:-auto}" | tr '[:upper:]' '[:lower:]')" in
           off|false|0|no|disabled)
@@ -149,6 +148,7 @@ jobs:
         PROXY_SERVER: ${{ steps.proxy.outputs.proxy_server }}
         CAPTCHA_SOLVER: ${{ vars.CAPTCHA_SOLVER || 'auto' }}
         CHROME_BIN: ${{ vars.CHROME_BIN }}
+        CRON_JOB: ${{ secrets.CRON_JOB }}
       run: |
         # 有头 Chrome（Xvfb）指纹更接近真实浏览器，降低 Bestcap 风控拒绝
         if command -v xvfb-run >/dev/null 2>&1 && xvfb-run -a true >/dev/null 2>&1; then
