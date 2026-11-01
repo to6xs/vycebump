@@ -73,9 +73,9 @@ ONEMAIL_FROM_NAME = os.environ.get("ONEMAIL_FROM_NAME") or "Vycebump"
 CDP_URL = os.environ.get("CDP_URL") or "http://127.0.0.1:9222"
 FORCE_RENEW = os.environ.get("FORCE_RENEW", "").lower() in ("true", "1", "yes")
 # cron-job.org 自调度：CRON_JOB="API_Key,JobID"。Vyce 在剩余 24h 内可续期，
-# 因此成功续期后把下次触发写到约 1445 分钟后；失败则 30 分钟后重试。
+# 因此成功续期后把下次触发写到约 2640 分钟后；失败则 30 分钟后重试。
 CRON_JOB = os.environ.get("CRON_JOB", "").strip()
-CRON_NEXT_DELAY_MINUTES = 1445
+CRON_NEXT_DELAY_MINUTES = 2640
 CRON_RETRY_DELAY_MINUTES = 30
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.environ.get("STATE_FILE") or os.path.join(SCRIPT_DIR, "renew_state.json")
