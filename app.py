@@ -1317,17 +1317,26 @@ def update_cronjob_schedule(delay_minutes: int) -> None:
 
 
 def cron_delay_from_state(state: Dict, now_ms: int) -> int:
-    """根据各服务器下次可续期时间计算 cron 触发延迟（分钟）。"""
-    next_ts = []
+    """根据本次运行结果计算 cron 触发延迟（分钟）。
+
+    - 刚续期成功：按 CRON_NEXT_DELAY_MINUTES（例如 2640 分钟 ≈ 44h）延后，
+      续期后到期时间重置为 48h，届时仍剩约 4h，处于可续期窗口内。
+    - 冷却中 / 服务端 429：按 next_renewal_ts（进入可续期窗口的时刻）+ 5 分钟。
+    多服务器取最早的一次，避免任何机器过期。
+    """
+    delays = []
     for entry in state.values():
-        if isinstance(entry, dict):
-            ts = entry.get("next_renewal_ts")
-            if isinstance(ts, (int, float)):
-                next_ts.append(int(ts))
-    if not next_ts:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("status") == "success":
+            delays.append(CRON_NEXT_DELAY_MINUTES)
+            continue
+        ts = entry.get("next_renewal_ts")
+        if isinstance(ts, (int, float)):
+            delays.append(int((ts - now_ms) / 60000) + 5)
+    if not delays:
         return CRON_NEXT_DELAY_MINUTES
-    delay = int((min(next_ts) - now_ms) / 60000) + 5
-    return max(delay, 10)
+    return max(min(delays), 10)
 
 
 def main():
